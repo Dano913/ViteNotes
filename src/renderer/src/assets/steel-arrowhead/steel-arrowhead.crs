@@ -1,0 +1,18 @@
+﻿[Arrow]
+Path=Steel Arrowhead.cur
+
+[Help]
+Path=Steel Arrowhead Help.ani
+
+[AppStarting]
+Path=Steel Arrowhead Wait.ani
+
+[Wait]
+Path=Steel Arrowhead Busy.ani
+
+[UpArrow]
+Path=Steel Arrowhead Alt. Select.cur
+
+[Hand]
+Path=Steel Arrowhead Link.ani
+
