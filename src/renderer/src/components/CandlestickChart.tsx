@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType } from 'lightweight-charts';
 import type { CandleData } from '../types/crypto';
 import { FaExpand, FaCompress } from 'react-icons/fa';
+import { DrawingToolbar } from './DrawingToolbar';
+import { ChartDrawingLayer } from './ChartDrawingLayer';
+import { useDrawing } from '../hooks/useDrawing';
 
 interface Props {
   data: CandleData[];
@@ -31,6 +34,27 @@ export const CandlestickChart: React.FC<Props> = ({ data }) => {
   const volumeSeriesRef = useRef<any>(null);
   const ma25SeriesRef = useRef<any>(null);
   const ma99SeriesRef = useRef<any>(null);
+  const [isDrawingMode, setIsDrawingMode] = useState(false);
+
+  const {
+    canvasRef,
+    drawingState,
+    drawingSettings,
+    setDrawingSettings,
+    redrawCanvas,
+    handleCanvasClick,
+  } = useDrawing(chartRef);
+
+  const {
+    startDrawing,
+    updateDrawing,
+    finishDrawing,
+    selectTool,
+    deleteLine,
+    clearAllLines,
+    toggleVisibility,
+    getCurrentTempLine,
+  } = useDrawing(chartRef);
 
   const handleResize = () => {
     if (chartRef.current && chartContainerRef.current) {
@@ -38,6 +62,8 @@ export const CandlestickChart: React.FC<Props> = ({ data }) => {
         width: chartContainerRef.current.clientWidth,
         height: chartContainerRef.current.clientHeight,
       });
+      // Redraw drawings after resize
+      setTimeout(redrawCanvas, 100);
     }
   };
 
@@ -126,6 +152,8 @@ export const CandlestickChart: React.FC<Props> = ({ data }) => {
       setTimeout(handleResize, 300); // Forzar actualización después de un breve retraso
     });
     sidebarObserver.observe(document.body, {
+    // Redraw drawings when data updates
+    setTimeout(redrawCanvas, 100);
       attributes: true,
       childList: true,
       subtree: true,
@@ -162,12 +190,48 @@ export const CandlestickChart: React.FC<Props> = ({ data }) => {
       attributeFilter: ['class'],
     });
 
+    // Handle chart interactions for drawing
+    const handleChartClick = (param: any) => {
+      if (!drawingState.currentTool || !chartContainerRef.current) return;
+
+      const rect = chartContainerRef.current.getBoundingClientRect();
+      const coordinate = {
+        x: param.point?.x || 0,
+        y: param.point?.y || 0,
+      };
+
+      if (!drawingState.isDrawing) {
+        startDrawing(coordinate);
+      } else {
+        finishDrawing();
+      }
+    };
+
+    const handleChartMouseMove = (param: any) => {
+      if (!drawingState.isDrawing || !chartContainerRef.current) return;
+
+      const coordinate = {
+        x: param.point?.x || 0,
+        y: param.point?.y || 0,
+      };
+
+      updateDrawing(coordinate);
+      redrawCanvas();
+    };
+
+    if (chartRef.current) {
+      chartRef.current.subscribeClick(handleChartClick);
+      chartRef.current.subscribeCrosshairMove(handleChartMouseMove);
+    }
     return () => {
       resizeObserver.disconnect();
       sidebarObserver.disconnect();
       window.removeEventListener('resize', handleResize);
       document.removeEventListener('fullscreenchange', handleResize);
+      observer.disconnect();
       if (chartRef.current) {
+        chartRef.current.unsubscribeClick(handleChartClick);
+        chartRef.current.unsubscribeCrosshairMove(handleChartMouseMove);
         chartRef.current.remove();
       }
     };
@@ -193,14 +257,43 @@ export const CandlestickChart: React.FC<Props> = ({ data }) => {
     }
   }, [data]);
 
+  // Handle drawing tool selection
+  const handleToolSelect = (tool: any) => {
+    selectTool(tool);
+    setIsDrawingMode(!!tool);
+  };
+
+  // Handle color change
+  const handleColorChange = (color: string) => {
+    setDrawingSettings({ color });
+  };
+
+  // Handle line width change
+  const handleLineWidthChange = (lineWidth: number) => {
+    setDrawingSettings({ lineWidth });
+  };
   const priceColor = currentPrice > previousPrice ? 'green' : 'red';
   const theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
 
   return (
     <div style={{ position: 'relative', width: '99.2%', height: isExpanded ? '100vh' : '450px' }}>
+      {/* Drawing Toolbar */}
+      <DrawingToolbar
+        currentTool={drawingState.currentTool}
+        onToolSelect={handleToolSelect}
+        onClearAll={clearAllLines}
+        onToggleVisibility={toggleVisibility}
+        isVisible={drawingSettings.isVisible}
+        selectedColor={drawingSettings.color}
+        onColorChange={handleColorChange}
+        lineWidth={drawingSettings.lineWidth}
+        onLineWidthChange={handleLineWidthChange}
+      />
+
       <button onClick={toggleFullScreen} style={{ position: 'absolute', bottom: 2, right: 20, zIndex: 20, background: 'none', border: 'none', cursor: 'pointer', color: 'white' }}>
         {isExpanded ? <FaCompress className={`h-6 w-6 ${theme === 'dark' ? 'icon-dark' : 'icon-light'}`} /> : <FaExpand className={`h-4 w-4 ${theme === 'dark' ? 'icon-dark' : 'icon-light'}`} />}
       </button>
+
       <div
         ref={chartContainerRef}
         style={{
@@ -211,8 +304,50 @@ export const CandlestickChart: React.FC<Props> = ({ data }) => {
           height: '100%',
           transition: 'height 0.3s ease, width 0.3s ease',
           zIndex: 10,
+          cursor: isDrawingMode ? 'crosshair' : 'default',
         }}
       />
+
+      {/* Drawing Layer */}
+      <canvas
+        ref={canvasRef}
+        onClick={handleCanvasClick}
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: -10,
+          width: '100%',
+          height: '100%',
+          pointerEvents: isDrawingMode ? 'auto' : 'none',
+          zIndex: 15,
+          cursor: isDrawingMode ? 'crosshair' : 'default',
+        }}
+      />
+
+      <ChartDrawingLayer
+        lines={drawingState.lines}
+        tempLine={getCurrentTempLine()}
+        isVisible={drawingSettings.isVisible}
+        priceToCoordinate={(point) => {
+          if (!chartRef.current) return null;
+          try {
+            const timeScale = chartRef.current.timeScale();
+            const priceScale = chartRef.current.priceScale('right');
+            const x = timeScale.timeToCoordinate(point.time);
+            const y = priceScale.priceToCoordinate(point.price);
+            return x !== null && y !== null ? { x, y } : null;
+          } catch {
+            return null;
+          }
+        }}
+        onLineSelect={(lineId) => {
+          // Handle line selection logic here
+        }}
+        onLineDelete={deleteLine}
+        selectedLineId={drawingState.selectedLineId}
+        containerRef={chartContainerRef}
+      />
+
       <div className={`${currentPrice > previousPrice ? 'text-[var(--secondary-text-color)]' : 'text-[var(--terciary-text-color)]'} bg-[var(--bg-color)] px-4`} style={{ position: 'absolute', top: 10, right: 70, zIndex: 10, color: priceColor, fontSize: '20px', fontFamily: 'Roboto, sans-serif' }}>
         ${currentPrice.toFixed(2)}
       </div>
